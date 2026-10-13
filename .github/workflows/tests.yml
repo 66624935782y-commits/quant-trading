@@ -17,3 +17,5 @@ jobs:
           cache-dependency-path: requirements.lock
       - run: python -m pip install --require-hashes -r requirements.lock
       - run: python -m pytest -q
+      - name: Check compatibility with GBK default file encoding
+        run: python -X utf8=0 -m pytest -q --simulate-gbk

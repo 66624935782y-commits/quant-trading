@@ -145,6 +145,7 @@ py -3.12 -m venv .venv
 | 找不到 `app.py` 或 `requirements.lock` | 用 `Get-ChildItem` 检查当前目录，进入真正包含这些文件的项目目录 |
 | 找不到 `.\.venv\Scripts\python.exe` | 在项目目录先执行第 3 步的创建环境命令 |
 | 显示 `No module named streamlit` 或 `pytest` | 用第 4 步的命令安装依赖，确认没有换用系统 Python |
+| 测试报 `UnicodeDecodeError: 'gbk' codec` | 旧版测试漏写了 UTF-8 编码；升级到 0.2.1 或之后版本，再运行 setup_windows，保留测试检查 |
 | 页面打不开 | 检查终端是否仍在运行、是否显示报错，再使用终端给出的本地地址 |
 | 提示端口被占用 | 先关闭自己此前启动的 Streamlit；也可在启动命令最后追加 `--server.port=8502` |
 | 模拟买入被拒绝 | 检查输入数量、剩余现金和仓位上限；不要通过修改安全配置绕过限制 |

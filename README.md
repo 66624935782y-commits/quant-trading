@@ -63,6 +63,8 @@ py -3.12 -m venv .venv
 
 ## 文件说明
 
+0.2.1 修复了中文 Windows 默认 GBK 编码导致的一项测试失败。所有测试文件读写均明确编码，正常模式和 GBK 模拟模式各有 173 项测试通过。GitHub Actions 增加 GBK 模拟检查；这种模拟验证不代替修复版在 Windows 实机运行。
+
 | 路径 | 用途 |
 | --- | --- |
 | `app.py` | Streamlit 网页入口 |

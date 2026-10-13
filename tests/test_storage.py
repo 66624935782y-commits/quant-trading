@@ -62,7 +62,7 @@ def test_raw_archive_keeps_unsorted_duplicates_extra_fields_and_open_candle(tmp_
     raw.append(open_candle)
     batch = build_batch(initial.request, raw, source="binance_public", fetched_at=NOW)
     saved = save_batch(batch, tmp_path)
-    assert json.loads((saved.directory / "raw.json").read_text()) == raw
+    assert json.loads((saved.directory / "raw.json").read_text(encoding="utf-8")) == raw
     loaded = load_batch(saved.directory)
     assert loaded.raw_rows == raw
     assert len(loaded.raw_rows) == 7
@@ -124,9 +124,9 @@ def test_rewritten_csv_checksum_does_not_allow_candles_to_disagree_with_raw(tmp_
 def test_rewritten_raw_checksum_still_checks_derived_candles(tmp_path):
     saved = save_batch(example(), tmp_path)
     raw_file = saved.directory / "raw.json"
-    rows = json.loads(raw_file.read_text())
+    rows = json.loads(raw_file.read_text(encoding="utf-8"))
     rows[0][5] = "99"
-    content = json.dumps(rows).encode()
+    content = json.dumps(rows).encode("utf-8")
     raw_file.write_bytes(content)
     metadata = manifest(saved)
     metadata["raw_sha256"] = hashlib.sha256(content).hexdigest()
@@ -175,8 +175,9 @@ def test_manifest_cannot_add_a_path_to_redirect_reads(tmp_path):
 def test_duplicate_manifest_json_fields_rejected(tmp_path):
     saved = save_batch(example(), tmp_path)
     path = saved.directory / "manifest.json"
-    content = path.read_text()
-    path.write_text(content.replace('"schema_version": 1', '"schema_version": 1, "schema_version": 1'))
+    content = path.read_text(encoding="utf-8")
+    path.write_text(content.replace('"schema_version": 1', '"schema_version": 1, "schema_version": 1'),
+                    encoding="utf-8")
     with pytest.raises(StorageError, match="重复字段"):
         load_batch(saved.directory)
 
@@ -228,7 +229,7 @@ def test_catalog_ignores_only_hidden_pending_runs(tmp_path):
     saved = save_batch(example(), tmp_path)
     pending = saved.directory.parent / ".pending-interrupted"
     pending.mkdir()
-    (pending / "raw.json").write_text("unfinished")
+    (pending / "raw.json").write_text("unfinished", encoding="utf-8")
     assert [item.directory for item in list_saved_batches(tmp_path)] == [saved.directory]
     incomplete = saved.directory.parent / "unexpected-run"
     incomplete.mkdir()
