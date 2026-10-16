@@ -3,8 +3,10 @@ import errno
 import contextlib
 import io
 import importlib
+import hmac
 import json
 import os
+import secrets
 from pathlib import Path
 import socket
 import subprocess
@@ -61,15 +63,32 @@ try {
         return 'unknown'
 
 
-def service_ready(pid):
-    """绕过系统代理直连 IPv4，并确认 HTTP 响应确实来自指定助手进程。"""
+def service_ready(pid, instance_id=None):
+    """核对本次启动标识，兼容 Windows 虚拟环境包装器与服务 PID 不同的情况。"""
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(URL + '/', timeout=1) as response:
-            return (response.status == 200 and response.headers.get('X-AQ-Pid') == str(pid)
-                    and b'AI Quant Trader Private' in response.read(128000))
-    except (OSError, ValueError, urllib.error.URLError):
+            server_pid = response.headers.get('X-AQ-Pid', '')
+            if instance_id is not None:
+                actual = response.headers.get('X-AQ-Instance', '')
+                identified = (isinstance(instance_id, str) and bool(instance_id)
+                              and hmac.compare_digest(actual, instance_id)
+                              and server_pid.isdecimal() and int(server_pid) > 0)
+            else:
+                # 仅为旧版记录保留严格 PID 检查，不降级为只检查端口或网页标题。
+                identified = server_pid == str(pid)
+            return response.status == 200 and identified and b'AI Quant Trader Private' in response.read(128000)
+    except (OSError, ValueError, TypeError, urllib.error.URLError):
         return False
+
+
+def server_executable():
+    """Windows 优先使用虚拟环境 pythonw，避免包装器另开空白控制台。"""
+    executable = Path(sys.executable)
+    windowless = executable.with_name('pythonw.exe')
+    if os.name == 'nt' and windowless.is_file():
+        return str(windowless)
+    return str(executable)
 
 
 def port_open():
@@ -119,7 +138,7 @@ def diagnose():
             state = process_state(record)
             labels = {'match': '助手进程存在', 'missing': '进程已退出', 'different': '旧编号或非本项目进程', 'unknown': '无法核实进程身份'}
             lines.append('启动记录: ' + labels[state])
-            lines.append('指定助手 HTTP 检查: ' + ('通过' if service_ready(record.get('pid')) else '未通过'))
+            lines.append('指定助手 HTTP 检查: ' + ('通过' if service_ready(record.get('pid'), record.get('instance_id')) else '未通过'))
         except (OSError, ValueError, TypeError):
             lines.append('启动记录: 无法读取')
     else:
@@ -171,7 +190,7 @@ def start():
             print('启动记录异常，请双击 diagnose.bat 查看摘要。')
             return 1
         if state == 'match':
-            if service_ready(old['pid']):
+            if service_ready(old['pid'], old.get('instance_id')):
                 print('已有助手服务且 HTTP 检查通过，正在打开浏览器。')
                 webbrowser.open(URL)
                 return 0
@@ -188,14 +207,16 @@ def start():
         print('请先关闭原服务窗口或使用原文件夹的 stop.bat，再重试。')
         return 1
     RUNTIME.mkdir(exist_ok=True)
+    instance_id = secrets.token_hex(32)
+    executable = server_executable()
     try:
         with open(RUNTIME / 'server-output.log', 'ab') as output:
-            flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS if os.name == 'nt' else 0
-            process = subprocess.Popen([sys.executable, '-u', str(ROOT / 'run_server.py')], cwd=ROOT,
+            flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            process = subprocess.Popen([executable, '-u', str(ROOT / 'run_server.py')], cwd=ROOT,
                 stdin=subprocess.DEVNULL, stdout=output, stderr=output, creationflags=flags,
-                start_new_session=os.name != 'nt', env={**os.environ, 'PYTHONUTF8': '1'})
+                start_new_session=os.name != 'nt', env={**os.environ, 'PYTHONUTF8': '1', 'AQ_STARTUP_INSTANCE': instance_id})
         PIDFILE.write_text(json.dumps({'pid': process.pid, 'script': str(ROOT / 'run_server.py'),
-                                      'python': sys.executable}), encoding='utf-8')
+                                      'python': executable, 'instance_id': instance_id}), encoding='utf-8')
     except OSError:
         print('无法启动或保存进程记录，请确认已完整解压到自己的可写文件夹。')
         return 1
@@ -205,7 +226,7 @@ def start():
             PIDFILE.unlink(missing_ok=True)
             diagnose()
             return 1
-        if service_ready(process.pid):
+        if service_ready(process.pid, instance_id):
             print('助手服务与 HTTP 检查通过。请在浏览器输入管理员密码。')
             webbrowser.open(URL)
             return 0

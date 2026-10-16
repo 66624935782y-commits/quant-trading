@@ -30,7 +30,7 @@ def main():
         print('配置无效：请检查 .env，设置至少 16 位非默认管理员密码、正确风控金额及交易开关。')
         return 1
     configure_logging(settings)
-    app = create_app(settings)
+    app = create_app(settings, instance_id=os.environ.get('AQ_STARTUP_INSTANCE'))
     uvicorn.run(app, host='127.0.0.1', port=8000, workers=1, access_log=False, log_level='warning')
     lock.close()
     return 0

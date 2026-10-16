@@ -47,8 +47,9 @@ class CloseOrder(Model):
     percent: str = Field(max_length=16)
 
 
-def create_app(settings, exchange=None, database=None):
+def create_app(settings, exchange=None, database=None, instance_id=None):
     """构建可注入交易所替身的应用；生产配置仅由 .env 读取。"""
+    instance_id = instance_id or secrets.token_hex(32)
     db = database or Database(settings.database)
     trader = Trader(settings, db, exchange or Binance(settings))
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -105,7 +106,7 @@ def create_app(settings, exchange=None, database=None):
     @app.get('/')
     def index():
         """返回唯一的 HTML 页面，页面内不包含账户或密钥。"""
-        return FileResponse(ROOT / 'web/index.html', headers={'X-AQ-Pid': str(os.getpid())})
+        return FileResponse(ROOT / 'web/index.html', headers={'X-AQ-Pid': str(os.getpid()), 'X-AQ-Instance': instance_id})
 
     @app.post('/api/login')
     def login(data: Login):

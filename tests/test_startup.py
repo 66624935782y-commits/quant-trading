@@ -32,7 +32,7 @@ def test_live_pid_without_http_must_not_open_browser(launcher, monkeypatch):
     """进程存在但未监听，必须报失败而非打开拒连页面。"""
     record(launcher)
     monkeypatch.setattr(manage, 'process_state', lambda _: 'match')
-    monkeypatch.setattr(manage, 'service_ready', lambda _: False)
+    monkeypatch.setattr(manage, 'service_ready', lambda *_: False)
     monkeypatch.setattr(manage, 'diagnose', Mock())
     assert manage.start() == 1
     manage.webbrowser.open.assert_not_called()
@@ -42,7 +42,7 @@ def test_reuses_only_confirmed_healthy_process(launcher, monkeypatch):
     """只有身份和 HTTP 都通过，才打开同一 IPv4 地址。"""
     record(launcher)
     monkeypatch.setattr(manage, 'process_state', lambda _: 'match')
-    monkeypatch.setattr(manage, 'service_ready', lambda _: True)
+    monkeypatch.setattr(manage, 'service_ready', lambda *_: True)
     assert manage.start() == 0
     manage.webbrowser.open.assert_called_once_with('http://127.0.0.1:8000')
 
