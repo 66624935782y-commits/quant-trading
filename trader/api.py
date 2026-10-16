@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .config import ROOT
 from .db import Database
-from .exchange import Binance, UserError
+from .exchange import Binance, UserError, friendly_exchange_error, safe_error_details
 from .service import Trader
 
 class Model(BaseModel):
@@ -90,13 +90,13 @@ def create_app(settings, exchange=None, database=None, instance_id=None):
     async def business_error(request, exc):
         """只返回程序定义的中文错误。"""
         trader.audit('操作被拒绝', str(exc))
-        return JSONResponse({'error': str(exc)}, status_code=400)
+        return JSONResponse({'error': str(exc), **safe_error_details(exc)}, status_code=400)
 
     @app.exception_handler(ccxt.BaseError)
     async def exchange_error(request, exc):
         """交易所网络错误不得泄露签名 URL 或原始响应。"""
         trader.audit('币安连接失败', type(exc).__name__)
-        return JSONResponse({'error': '币安连接超时或不可用，请检查网络、地区限制和 IP 白名单。订单若未确认，请先核对，不要重发。'}, status_code=502)
+        return JSONResponse({'error': friendly_exchange_error(exc) + ' 订单若未确认，请先核对，不要重发。', **safe_error_details(exc)}, status_code=502)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):

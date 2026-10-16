@@ -1,6 +1,8 @@
 """CCXT USDT 永续适配器；真实行情和账户均来自币安，不提供演示数据。"""
 from datetime import datetime, timezone
 from decimal import Decimal
+import ipaddress
+import re
 import ccxt
 
 SYMBOLS = {'BTCUSDT': 'BTC/USDT:USDT', 'ETHUSDT': 'ETH/USDT:USDT', 'SOLUSDT': 'SOL/USDT:USDT'}
@@ -8,9 +10,60 @@ SYMBOLS = {'BTCUSDT': 'BTC/USDT:USDT', 'ETHUSDT': 'ETH/USDT:USDT', 'SOLUSDT': 'S
 class UserError(Exception):
     """可直接展示的中文业务错误，禁止包含原始交易所异常文本。"""
 
+    def __init__(self, message, code=None, request_ip=None):
+        """只携带脱敏数值错误码与经验证的请求出口 IP。"""
+        super().__init__(message)
+        self.code, self.request_ip = code, request_ip
+
 
 class RejectedOrder(UserError):
     """交易所明确拒绝且未接受订单，可安全记录为失败而非结果未知。"""
+
+
+def safe_error_details(exc):
+    """从异常中仅提取数字错误码和合法 IP，绝不返回原始响应、URL 或签名。"""
+    text = str(exc)[:16384]
+    code = getattr(exc, 'code', None)
+    if type(code) is not int or not -999999 <= code < 0:
+        match = re.search(r"[\"']code[\"']\s*:\s*(-[0-9]{1,6})(?![0-9])", text)
+        code = int(match.group(1)) if match else None
+    candidate = getattr(exc, 'request_ip', None)
+    if not candidate:
+        match = re.search(r'(?:request\s+ip|request_ip)\s*[:=]\s*([0-9a-fA-F:.]+)', text, re.IGNORECASE)
+        candidate = match.group(1).rstrip('.') if match else None
+    try:
+        request_ip = str(ipaddress.ip_address(candidate)) if candidate else None
+    except ValueError:
+        request_ip = None
+    return {'code': code, 'request_ip': request_ip}
+
+
+def friendly_exchange_error(exc):
+    """将币安常见错误码映射为中文；不把含密钥的原始异常拼接进结果。"""
+    details = safe_error_details(exc)
+    hints = {
+        -1002: '币安未授权此读取操作，请检查密钥状态、账户类型与读取权限。',
+        -1021: '请求时间不在币安允许窗口内。请在 Windows 设置中打开自动设置时间并点击立即同步，然后重启程序。',
+        -1022: '币安签名校验失败。请确认 Key 和 Secret 来自同一组 API、没有填反或多余空格，并确认密钥类型。',
+        -2014: '币安认为 API Key 格式不正确。请检查是否把 Key 填错行、漏复制或包含额外字符。',
+        -2015: '币安认证被拒绝：可能是密钥无效、API 白名单不包含程序当前出口 IP，或合约读取权限不符；此错误无法单独确定是哪一种。',
+        -4056: '币安不接受当前 API 密钥类型，请检查是否使用本工具配置方式支持的 API 类型。',
+        -4057: '币安不接受当前 RSA 公钥配置，请检查 API 类型；不要把公钥当成 API Secret。',
+    }
+    code = details['code']
+    if code in hints:
+        message = hints[code]
+    elif isinstance(exc, ccxt.NetworkError):
+        message = '币安连接超时、网络受限或服务不可用，请先检查网络。'
+    elif isinstance(exc, ccxt.AuthenticationError):
+        message = '币安认证失败，请检查密钥状态、合约读取权限和 IP 白名单。'
+    else:
+        message = '币安请求失败，请检查账户类型、权限、交易所服务状态。'
+    if code is not None:
+        message += f'（币安错误码 {code}）'
+    if details['request_ip']:
+        message += ' 币安报告的请求出口 IP：' + details['request_ip'] + '，请与 API 白名单核对。'
+    return message
 
 
 def number(value):
@@ -26,7 +79,7 @@ def number(value):
 
 class Binance:
     def __init__(self, settings):
-        """使用 CCXT 官方签名，不启用调试日志，不读取任何代理环境配置。"""
+        """使用 CCXT 官方签名，不启用调试日志，不输出请求调试内容。"""
         self.client = ccxt.binanceusdm({'apiKey': settings.api_key, 'secret': settings.api_secret,
             'enableRateLimit': True, 'timeout': 12000, 'maxRetriesOnFailure': 0, 'options': {'adjustForTimeDifference': True, 'fetchCurrencies': False, 'fetchOpenOrders': {'warnWithoutSymbol': False}}})
         self.credentials = bool(settings.api_key and settings.api_secret)
@@ -37,16 +90,17 @@ class Binance:
             return getattr(self.client, method)(*args, **kwargs)
         except ccxt.NetworkError:
             raise
-        except ccxt.AuthenticationError:
-            raise (RejectedOrder if method == 'create_order' else UserError)('币安认证失败，请检查密钥、合约权限和 IP 白名单。') from None
+        except ccxt.AuthenticationError as exc:
+            details = safe_error_details(exc)
+            raise (RejectedOrder if method == 'create_order' else UserError)(friendly_exchange_error(exc), **details) from None
         except ccxt.InsufficientFunds:
             raise (RejectedOrder if method == 'create_order' else UserError)('币安可用保证金不足，订单被明确拒绝。') from None
         except ccxt.OrderNotFound:
             raise
         except (ccxt.InvalidOrder, ccxt.PermissionDenied):
             raise (RejectedOrder if method == 'create_order' else UserError)('币安明确拒绝请求，请检查订单规则或账户权限。') from None
-        except ccxt.BaseError:
-            raise UserError('币安拒绝请求，请检查交易规则、账户模式、权限及服务状态。') from None
+        except ccxt.BaseError as exc:
+            raise UserError(friendly_exchange_error(exc), **safe_error_details(exc)) from None
 
     def private(self):
         """读取账户前检查密钥配置，禁止以假余额替代错误。"""

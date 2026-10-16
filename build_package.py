@@ -11,7 +11,7 @@ def build(destination=None):
     target.parent.mkdir(parents=True, exist_ok=True)
     paths = [ROOT/name for name in ('.env.example', '.gitignore', 'README.md', 'VALIDATION.md', 'requirements.txt',
              'requirements-dev.txt', 'pytest.ini', 'install.bat', 'start.bat', 'stop.bat',
-             'manage.py', 'run_server.py', 'diagnose.bat', 'build_package.py', 'web/index.html')]
+             'manage.py', 'run_server.py', 'diagnose.bat', 'check_api.bat', 'build_package.py', 'web/index.html')]
     paths += sorted((ROOT/'trader').glob('*.py'))
     paths += sorted((ROOT/'tests').glob('*.py'))
     with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as archive:
