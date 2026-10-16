@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Quant Trader Private</title>
+<script async src="https://cdn.tailwindcss.com/3.4.17"></script>
+<style>body{font-family:system-ui,sans-serif;background:#0c1423;color:#e2e8f0;margin:auto;max-width:1200px;padding:24px}section{background:#152238;border:1px solid #304259;border-radius:12px;padding:20px;margin:18px 0}input,select,button{padding:9px;border-radius:6px;background:#24364e;color:#fff;border:1px solid #496079;margin:5px}button{cursor:pointer}button:disabled{opacity:.45;cursor:wait}table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:10px;border-bottom:1px solid #334155;text-align:left;white-space:nowrap}h1{font-size:26px;font-weight:700}h2{font-size:20px;margin-bottom:12px}label{display:inline-block}pre{white-space:pre-wrap;overflow-wrap:anywhere} .scroll{overflow:auto}.muted{color:#a9bbd3}.danger{background:#9f2839}.primary{background:#087e70}[hidden]{display:none!important}</style>
+</head>
+<body>
+<header><p class="muted">私人 · 本机访问 · USDT 本位永续</p><h1>AI Quant Trader Private</h1><p id="mode" class="muted">请先登录</p></header>
+<section id="loginPanel"><h2>管理员登录</h2><form id="loginForm"><label>管理员密码 <input id="password" type="password" autocomplete="current-password" maxlength="1024" required></label><button class="primary">登录</button></form><p class="muted">密码在本机 .env 中配置。不要向任何人发送密钥或该文件。</p></section>
+<div id="workspace" hidden>
+<section><div id="limits"></div><button id="refresh">刷新账户与挂单</button><button id="reconcile">核对未确认订单</button><button id="resume">解除紧急停止锁</button><button id="logout">退出登录</button><button id="emergency" class="danger">紧急停止：撤单 + 全部平仓 + 禁止开仓</button><p class="muted">紧急停止依赖网络和币安响应，可能部分失败。请核对结果；服务停止或断网不会自动平仓。</p></section>
+<section><h2>真实账户概览</h2><p id="accountSummary">尚未读取账户</p><p class="muted">今日按 UTC 00:00 起算（泰国时间 07:00、中国时间 08:00）。净额包含已实现盈亏、手续费及资金费。</p><div id="positions" class="scroll"></div></section>
+<section><h2>实时行情 <span class="muted" style="font-size:14px">每 5 秒刷新</span></h2><p id="quoteTime" class="muted">尚未获取行情</p><div id="quotes" class="scroll"></div></section>
+<section><h2>手动开仓</h2><p class="muted">金额是名义价值，不是保证金。10 USDT 可能不满足交易所最低要求；程序不会擅自放大金额。市价按最新价估算，成交滑点可能使实际名义价值超过估算上限。</p><form id="orderForm">
+<label>交易对 <select id="symbol"><option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option></select></label>
+<label>方向 <select id="direction"><option value="long">做多</option><option value="short">做空</option></select></label>
+<label>杠杆 <input id="leverage" type="number" value="5" min="1" max="20" step="1" required style="width:80px"></label>
+<label>保证金模式 <select id="margin"><option value="isolated">逐仓</option></select></label>
+<label>名义价值 USDT <input id="notional" type="number" min="0.000001" step="any" value="10" required style="width:100px"></label>
+<label>订单类型 <select id="kind"><option value="limit">限价</option><option value="market">市价</option></select></label>
+<label id="priceLabel">限价 USDT <input id="price" type="number" min="0.00000001" step="any" required></label>
+<button type="submit" class="primary">确认下单</button></form></section>
+<section><h2>未成交挂单</h2><p class="muted">包含其他 USDT 合约的普通与条件/Algo 挂单；撤销全部会一并取消已有止盈止损，请谨慎确认。</p><div id="orders" class="scroll"></div><button id="cancel" class="danger">撤销全部挂单</button></section>
+<section><h2>交易记录</h2><button id="history">刷新本地记录</button><button id="sync">从币安同步成交（可能需要几分钟）</button><p class="muted">订单意图与真实成交分开显示。演练记录不代表成交。币安同步范围为最近 90 天的指定合约及当前持仓合约；订单和成交增量同步并长期保留，网页显示各最近 500 条。币安保留期外记录及历史 Algo 订单请在币安导出核对。</p><h3>实际成交（手续费币种及已实现盈亏来自币安）</h3><div id="fills" class="scroll"></div><h3>交易所普通订单快照</h3><div id="exchangeOrders" class="scroll"></div><h3>本机提交记录</h3><div id="intents" class="scroll"></div></section>
+</div>
+<section aria-live="polite"><h2>操作结果</h2><pre id="result">请登录后读取真实数据。</pre></section>
+<script>
+'use strict';
+// 通过固定页面编号查找控件，不从外部内容生成选择器。
+const el=id=>document.getElementById(id);
+let live=false,busy=false,quoteBusy=false,loggedIn=false;
+// 格式化显示时保留零，缺失数据明确标记。
+function fmt(value){return value===null||value===undefined?'未提供':String(value)}
+// 所有数据写入 textContent，禁止把交易所内容当作 HTML 执行。
+function table(target,headers,rows){const root=el(target);root.replaceChildren();if(!rows.length){root.textContent='暂无记录';return}const t=document.createElement('table'),head=document.createElement('tr');headers.forEach(h=>{const c=document.createElement('th');c.textContent=h;head.append(c)});t.append(head);rows.forEach(row=>{const tr=document.createElement('tr');row.forEach(value=>{const td=document.createElement('td');if(value instanceof Node)td.append(value);else td.textContent=fmt(value);tr.append(td)});t.append(tr)});root.append(t)}
+// 会话仅用 HttpOnly Cookie；跨站脚本无法读取令牌。
+async function api(path,data){const response=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Trader-Request':'1'},body:data===undefined?undefined:JSON.stringify(data)});let body;try{body=await response.json()}catch{throw Error('服务响应异常，请检查服务状态，不要重复发单。')}if(!response.ok){if(response.status===401&&path!=='login')showLogin();throw Error(body.error||'请求失败，请核对账户状态。')}return body}
+// 页面不留存密码或密钥。
+function showLogin(){loggedIn=false;el('loginPanel').hidden=false;el('workspace').hidden=true;el('mode').textContent='请登录'}
+// 显示清晰结果，包括未确认和部分失败状态。
+function report(value){el('result').textContent=typeof value==='string'?value:JSON.stringify(value,null,2)}
+// 防止连续点击；后端另有持久化幂等和串行锁。
+async function action(fn){if(busy)return;busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);try{await fn()}catch(error){report(error.message)}finally{busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=false)}}
+// 更新交易模式，按钮确认文本使用服务端实际开关。
+async function status(){const s=await api('status');live=s.live;el('mode').textContent=s.live?'实盘已开启：确认操作会发送真实交易请求':'演练模式：只读取真实数据，交易操作不会发送';el('mode').style.color=s.live?'#fda4af':'#5eead4';el('limits').textContent=`单笔名义价值上限 ${s.max_notional} USDT · UTC 单日净亏损限制 ${s.daily_loss} USDT · 紧急锁 ${s.halted?'已锁定':'未锁定'} · 未确认订单 ${s.pending} 笔`;return s}
+// 刷新持仓时为每个方向创建独立平仓控件。
+async function account(){try{const data=await api('account');el('accountSummary').textContent=`USDT 合约余额 ${data.balance.total} · 可用 ${data.balance.free} · 今日已实现 ${data.pnl.realized} · 今日净额 ${data.pnl.net} USDT`;table('positions',['合约','方向','数量（合约）','开仓价','标记价','未实现盈亏','杠杆','模式','平仓'],data.positions.map(p=>{const box=document.createElement('div'),percent=document.createElement('input'),button=document.createElement('button');percent.type='number';percent.min='0.01';percent.max='100';percent.step='any';percent.value='100';percent.style.width='75px';percent.setAttribute('aria-label','平仓百分比');button.textContent='按比例平仓 %';button.onclick=()=>action(async()=>{if(!(Number(percent.value)>0&&Number(percent.value)<=100))throw Error('比例必须为 0–100%（不含 0）');if(!confirm(`${live?'真实':'演练'}平仓 ${p.symbol} ${p.side} 的 ${percent.value}%？`))return;const result=await api('close',{symbol:p.symbol,side:p.side,percent:percent.value,request_id:requestID({action:'close',symbol:p.symbol,side:p.side,percent:percent.value})});report(result);if(['confirmed','dry_run','rejected'].includes(result.state))newRequest();await refresh()});box.append(percent,button);return[p.symbol,p.side,p.quantity,p.entry_price,p.mark_price,p.unrealized_pnl,p.leverage,p.margin_mode,box]}))}catch(error){el('accountSummary').textContent='账户读取失败：'+error.message;el('positions').replaceChildren();throw error}}
+// 行情失败时删除旧值，避免把过期数据标成实时行情。
+async function quotes(){if(!loggedIn||quoteBusy)return;quoteBusy=true;try{const data=await api('quotes');table('quotes',['交易对','最新价格 USDT','24h 涨跌 %','24h 成交额 USDT'],data.map(q=>[q.symbol,q.price,q.change,q.volume_usdt]));el('quoteTime').textContent='本机接收时间：'+new Date().toLocaleString()}catch(error){el('quoteTime').textContent='行情读取失败：'+error.message;el('quotes').replaceChildren()}finally{quoteBusy=false}}
+// 本机记录与币安成交分开展示，挂单的价格不是成交价。
+async function history(){const data=await api('history');table('fills',['时间','合约','方向','数量','成交价','手续费','手续费币种','已实现盈亏 USDT','订单号'],data.fills.map(f=>[new Date(f.timestamp).toLocaleString(),f.symbol,f.side,f.quantity,f.price,f.fee,f.fee_asset,f.realized_pnl,f.order_id]));table('exchangeOrders',['订单号','合约','方向','状态','数量','已成交','成交均价'],data.exchange_orders.map(o=>[o.order_id,o.symbol,o.side,o.status,o.quantity,o.filled,o.average]));table('intents',['时间','合约','操作','状态','订单号','已成交量','成交均价','客户端编号'],data.orders.map(o=>[new Date(o.created*1000).toLocaleString(),o.symbol,o.request.action,o.status+' / '+fmt(o.result.status),o.exchange_id,o.result.filled,o.result.average,o.id]))}
+// 刷新普通挂单，错误时清除旧挂单视图。
+async function orders(){try{const data=await api('orders');table('orders',['订单号','合约','状态','价格','已成交','未成交'],data.map(o=>[o.order_id,o.symbol,o.status,o.price,o.filled,o.remaining]))}catch(error){el('orders').textContent='挂单读取失败：'+error.message;throw error}}
+// 相同操作保留幂等 UUID，网络中断后再次点击也不会自动再发一笔。
+function requestID(payload){const signature=JSON.stringify(payload),stored=sessionStorage.getItem('aq_request');if(stored){const item=JSON.parse(stored);if(item.signature===signature)return item.id}const id=crypto.randomUUID();sessionStorage.setItem('aq_request',JSON.stringify({signature,id}));return id}
+// 每次真正新的开仓必须由用户主动清理已成功请求编号。
+function newRequest(){sessionStorage.removeItem('aq_request')}
+// 部分接口失败不阻挡其余视图刷新。
+async function refresh(){const checks=await Promise.allSettled([status(),account(),orders(),history()]);const errors=checks.filter(r=>r.status==='rejected').map(r=>r.reason.message);if(errors.length)report([...new Set(errors)].join('\n'))}
+el('loginForm').onsubmit=event=>{event.preventDefault();action(async()=>{try{await api('login',{password:el('password').value})}finally{el('password').value=''}loggedIn=true;el('loginPanel').hidden=true;el('workspace').hidden=false;const s=await status();el('leverage').value=s.default_leverage;await refresh();await quotes()})};
+el('logout').onclick=()=>action(async()=>{await api('logout',{});showLogin();report('已退出登录')});
+el('refresh').onclick=()=>action(refresh);
+el('kind').onchange=()=>{const limit=el('kind').value==='limit';el('priceLabel').hidden=!limit;el('price').required=limit};
+el('orderForm').onsubmit=event=>{event.preventDefault();action(async()=>{await status();const payload={symbol:el('symbol').value,direction:el('direction').value,leverage:Number(el('leverage').value),margin_mode:'isolated',notional:el('notional').value,kind:el('kind').value,price:el('kind').value==='limit'?el('price').value:null};if(!confirm(`${live?'真实下单':'演练，不发订单'}：${payload.symbol} ${payload.direction==='long'?'做多':'做空'}，${payload.leverage}x 逐仓，名义价值 ${payload.notional} USDT，${payload.kind==='market'?'市价':'限价 '+payload.price}。确认？`))return;const result=await api('order',{...payload,request_id:requestID({action:'open',...payload})});report(result);if(result.state==='confirmed'||result.state==='dry_run'||result.state==='rejected'){newRequest()}await refresh()})};
+el('cancel').onclick=()=>action(async()=>{if(!confirm(`${live?'真实撤销':'演练'}所有普通和条件挂单（包括止盈止损）？`))return;report(await api('cancel-all',{}));await refresh()});
+el('emergency').onclick=()=>action(async()=>{if(!confirm('确认紧急停止？将持久禁止开仓，并尝试撤销普通与条件挂单、平仓全部 USDT 仓位。演练模式只锁开仓，不实际撤单或平仓。'))return;report(await api('emergency',{}));await refresh()});
+el('resume').onclick=()=>action(async()=>{if(confirm('确认解除紧急停止锁？日亏损限制仍生效。'))report(await api('resume',{}));await status()});
+el('reconcile').onclick=()=>action(async()=>{report(await api('reconcile',{}));await refresh()});
+el('history').onclick=()=>action(history);
+el('sync').onclick=()=>action(async()=>{report(await api('history/sync',{}));await history()});
+// 恢复有效会话后显示页面，未登录时不读取任何行情与账户 API。
+async function boot(){try{const s=await status();loggedIn=true;el('loginPanel').hidden=true;el('workspace').hidden=false;el('leverage').value=s.default_leverage;await refresh();await quotes()}catch{showLogin()}}
+boot();setInterval(quotes,5000);
+</script>
+</body></html>
